@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📁 3D模型查看器生成器（支持PLY/STL/OBJ）</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea, #764ba2); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 30px; text-align: center; }
+        .section { padding: 30px; border-bottom: 1px solid #eee; }
+        .section-title { font-size: 1.3em; color: #2c3e50; margin-bottom: 20px; border-bottom: 2px solid #3498db; }
+        .file-drop-zone { border: 3px dashed #3498db; border-radius: 12px; padding: 60px 20px; text-align: center; background: #f8f9fa; cursor: pointer; transition: 0.3s; }
+        .file-drop-zone:hover { background: #e3f2fd; border-color: #2c3e50; }
+        .file-drop-zone.dragover { background: #bbdefb; border-color: #27ae60; }
+        #fileInput { display: none; }
+        .file-list { max-height: 300px; overflow-y: auto; margin-top: 20px; }
+        .file-item { background: #f8f9fa; padding: 15px; margin-bottom: 10px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; }
+        .file-item-info { flex: 1; }
+        .file-item-name { font-weight: bold; color: #2c3e50; }
+        .file-item-stats { text-align: right; }
+        .file-item-vertices { color: #3498db; }
+        .file-item-faces { color: #e74c3c; }
+        .file-item-remove { background: #e74c3c; color: white; border: none; border-radius: 50%; width: 30px; height: 30px; cursor: pointer; margin-left: 15px; }
+        .generate-btn { width: 100%; padding: 20px; background: linear-gradient(135deg, #27ae60, #2ecc71); color: white; border: none; border-radius: 12px; font-size: 1.3em; font-weight: bold; cursor: pointer; margin-top: 20px; transition: 0.3s; }
+        .generate-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(39,174,96,0.4); }
+        .generate-btn:disabled { background: #95a5a6; cursor: not-allowed; }
+        .status-bar { padding: 20px 30px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #e74c3c; }
+        .status-dot.ready { background: #27ae60; }
+        .progress-container { padding: 30px; background: #f8f9fa; }
+        .progress-bar { width: 100%; height: 12px; background: #ecf0f1; border-radius: 6px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #3498db, #27ae60); width: 0%; transition: width 0.3s; }
+        .format-badge { display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 0.75em; background: #555; color: white; margin-left: 8px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>📁 3D模型查看器生成器</h1>
+        <p>支持 PLY / STL / OBJ 格式，打包为单个离线 HTML 查看器，按文件名控制显隐</p>
+    </div>
+    <div class="section">
+        <h2 class="section-title">📁 选择模型文件</h2>
+        <div class="file-drop-zone" id="dropZone">
+            <p>拖拽 .ply / .stl / .obj 文件到此处（最多5个）</p>
+            <span>或点击选择文件</span>
+        </div>
+        <input type="file" id="fileInput" multiple accept=".ply,.stl,.obj">
+        <div class="file-list" id="fileList"></div>
+    </div>
+    <div class="progress-container" id="progressContainer" style="display: none;">
+        <h3>⚙️ 处理进度</h3>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+    <div class="section">
+        <button class="generate-btn" id="generateBtn" disabled>🎯 生成 view.html（独立查看器）</button>
+    </div>
+    <div class="status-bar">
+        <span id="statusText">准备就绪</span>
+        <div class="status-dot" id="statusDot"></div>
+    </div>
+</div>
+
+<script>
+(function() {
+    'use strict';
+
+    const MODEL_DATABASE = [];
+    const MAX_FILES = 5;
+    const SUPPORTED_FORMATS = ['.ply', '.stl', '.obj'];
+
+    // 获取文件扩展名（小写）
+    function getFileExtension(filename) {
+        const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+        return SUPPORTED_FORMATS.includes(ext) ? ext : null;
+    }
+
+    // 解析 PLY 头部获取顶点/面数（仅对 .ply 有效）
+    function parsePLYHeader(arrayBuffer) {
+        const text = new TextDecoder('utf-8').decode(arrayBuffer);
+        const lines = text.split(/\r?\n/);
+        let vertices = 0, faces = 0;
+        for (let line of lines) {
+            line = line.trim().toLowerCase();
+            if (line.startsWith('element vertex ')) {
+                vertices = parseInt(line.split(/\s+/)[2]) || 0;
+            } else if (line.startsWith('element face ')) {
+                faces = parseInt(line.split(/\s+/)[2]) || 0;
+            } else if (line === 'end_header') {
+                break;
+            }
+        }
+        return { vertices, faces };
+    }
+
+    // 二进制安全 Base64 编码
+    function arrayBufferToBase64(arrayBuffer) {
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode.apply(null, chunk);
+        }
+        return btoa(binary);
+    }
+
+    // 处理单个文件
+    function processFile(file, index, total) {
+        return new Promise((resolve, reject) => {
+            const ext = getFileExtension(file.name);
+            if (!ext) {
+                reject(new Error('不支持的文件格式'));
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const arrayBuffer = e.target.result;
+                    let vertices = 0, faces = 0;
+
+                    // 仅对 PLY 解析头部以获取统计信息
+                    if (ext === '.ply') {
+                        const header = parsePLYHeader(arrayBuffer);
+                        vertices = header.vertices;
+                        faces = header.faces;
+                    } else {
+                        // STL/OBJ 暂不解析统计信息
+                        vertices = 0;
+                        faces = 0;
+                    }
+
+                    const base64 = arrayBufferToBase64(arrayBuffer);
+                    const progress = ((index + 1) / total) * 100;
+                    document.getElementById('progressFill').style.width = progress + '%';
+
+                    resolve({
+                        name: file.name,
+                        format: ext.substring(1), // 不带点: 'ply', 'stl', 'obj'
+                        data: base64,
+                        vertices: vertices,
+                        faces: faces,
+                        size: file.size
+                    });
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            reader.onerror = () => reject(new Error('文件读取失败'));
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    // 处理选择的文件列表
+    async function handleFiles(files) {
+        const modelFiles = Array.from(files)
+            .filter(f => SUPPORTED_FORMATS.includes(getFileExtension(f.name)))
+            .slice(0, MAX_FILES);
+
+        if (modelFiles.length === 0) {
+            alert('未找到支持的模型文件（支持 .ply, .stl, .obj）');
+            return;
+        }
+        if (modelFiles.length > MAX_FILES) {
+            alert('最多支持 ' + MAX_FILES + ' 个文件，已自动过滤');
+        }
+
+        document.getElementById('progressContainer').style.display = 'block';
+        document.getElementById('progressFill').style.width = '0%';
+        document.getElementById('generateBtn').disabled = true;
+
+        const promises = modelFiles.map((f, i) => processFile(f, i, modelFiles.length));
+        const results = await Promise.all(promises.map(p => p.catch(e => { console.error(e); return null; })));
+        const validModels = results.filter(m => m !== null);
+        MODEL_DATABASE.push(...validModels);
+        updateFileList();
+
+        document.getElementById('progressContainer').style.display = 'none';
+        document.getElementById('generateBtn').disabled = MODEL_DATABASE.length === 0;
+        document.getElementById('statusDot').className = MODEL_DATABASE.length ? 'status-dot ready' : 'status-dot';
+        document.getElementById('statusText').textContent = MODEL_DATABASE.length ? '已加载，可生成' : '准备就绪';
+    }
+
+    // 更新文件列表显示
+    function updateFileList() {
+        const list = document.getElementById('fileList');
+        list.innerHTML = '';
+        MODEL_DATABASE.forEach((m, i) => {
+            const div = document.createElement('div');
+            div.className = 'file-item';
+            const verticesDisplay = m.vertices ? m.vertices.toLocaleString() : 'N/A';
+            const facesDisplay = m.faces ? m.faces.toLocaleString() : 'N/A';
+            div.innerHTML = `
+                <div class="file-item-info">
+                    <div class="file-item-name">
+                        ${m.name}
+                        <span class="format-badge">${m.format.toUpperCase()}</span>
+                    </div>
+                </div>
+                <div class="file-item-stats">
+                    <div class="file-item-vertices">顶点: ${verticesDisplay}</div>
+                    <div class="file-item-faces">面: ${facesDisplay}</div>
+                </div>
+                <button class="file-item-remove" onclick="removeFile(${i})">×</button>
+            `;
+            list.appendChild(div);
+        });
+    }
+    window.removeFile = index => { MODEL_DATABASE.splice(index, 1); updateFileList(); };
+
+    // 生成最终的 view.html（背景改为渐变）
+    function generateViewHtml() {
+        const template = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>3D 模型查看器</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: sans-serif;
+            background: linear-gradient(135deg, #667eea, #764ba2); /* 与 main.html 一致的渐变 */
+        }
+        #controls {
+            position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.7);
+            color: white; padding: 15px; border-radius: 8px; z-index: 100;
+            max-height: 80vh; overflow-y: auto;
+        }
+        #controls label { display: block; margin: 5px 0; cursor: pointer; }
+        #controls input { margin-right: 8px; }
+        #debugPanel {
+            position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.8);
+            color: #0f0; padding: 15px; border-radius: 8px; z-index: 200;
+            max-width: 400px; max-height: 80vh; overflow: auto;
+            font-family: monospace; font-size: 12px;
+        }
+        .stats { position: absolute; bottom: 20px; left: 20px; color: #ccc; font-size: 12px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; }
+        .error { color: #f88; }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h3 style="margin-top:0;">模型显示控制</h3>
+        <div id="checkboxes"></div>
+    </div>
+    <div id="debugPanel">
+        <h4 style="margin:0 0 8px 0;">🔍 调试信息</h4>
+        <div id="log"></div>
+    </div>
+    <div class="stats" id="stats">等待模型加载...</div>
+
+    <!-- 加载 Three.js 核心库及各种加载器 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"><\/script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"><\/script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"><\/script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"><\/script>
+
+    <script>
+        // 调试日志
+        const logDiv = document.getElementById('log');
+        function debugLog(msg, isError = false) {
+            const line = document.createElement('div');
+            line.textContent = msg;
+            if (isError) line.style.color = '#f88';
+            logDiv.appendChild(line);
+            console.log(msg);
+        }
+        window.onerror = function(msg, url, line) {
+            debugLog('🚨 全局错误: ' + msg + ' (行 ' + line + ')', true);
+        };
+
+        try {
+            // ---------- 模型数据 ----------
+            const MODEL_DATABASE = __MODEL_DATABASE_PLACEHOLDER__;
+            debugLog('模型总数: ' + MODEL_DATABASE.length);
+
+            // Base64 转 ArrayBuffer
+            function base64ToUint8Array(base64) {
+                try {
+                    const binary = atob(base64);
+                    const len = binary.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+                    return bytes;
+                } catch (e) {
+                    throw new Error('Base64 解码失败: ' + e.message);
+                }
+            }
+
+            // 初始化 Three.js
+            if (typeof THREE === 'undefined') throw new Error('Three.js 未加载！');
+            debugLog('Three.js 版本: ' + THREE.REVISION);
+
+            const scene = new THREE.Scene();
+            // 不设置 scene.background，因为我们将使用 CSS 渐变背景（通过透明 canvas）
+
+            const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 5);
+
+            // 创建渲染器时启用透明
+            const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setClearColor(0x000000, 0); // 透明背景
+            document.body.appendChild(renderer.domElement);
+
+            // 阻止右键菜单（防止浏览器前进/后退）
+            renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
+            // 左键旋转、右键平移、中键缩放
+            controls.mouseButtons = {
+                LEFT: THREE.MOUSE.ROTATE,
+                MIDDLE: THREE.MOUSE.DOLLY,
+                RIGHT: THREE.MOUSE.PAN
+            };
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = true;
+            controls.maxPolarAngle = Math.PI / 2;
+
+            // 灯光
+            const ambientLight = new THREE.AmbientLight(0x404060);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(1, 2, 1);
+            scene.add(dirLight);
+            const backLight = new THREE.DirectionalLight(0x555555, 0.5);
+            backLight.position.set(-1, -1, -1);
+            scene.add(backLight);
+
+            // 存储所有可控制对象（Mesh 或 Group）
+            const objects = [];
+            let totalModels = MODEL_DATABASE.length;
+            let loadedCount = 0;
+
+            // 准备加载器
+            const plyLoader = new THREE.PLYLoader();
+            const stlLoader = new THREE.STLLoader();
+            const objLoader = new THREE.OBJLoader();
+
+            const checkboxDiv = document.getElementById('checkboxes');
+
+            MODEL_DATABASE.forEach((model, idx) => {
+                debugLog('处理模型 ' + (idx+1) + ': ' + model.name + ' (格式: ' + model.format + ')');
+                try {
+                    const uint8Array = base64ToUint8Array(model.data);
+                    debugLog('  - Base64 解码成功，大小: ' + uint8Array.length + ' 字节');
+                    const arrayBuffer = uint8Array.buffer;
+
+                    let result = null; // 可以是 Geometry 或 Group
+                    const format = model.format.toLowerCase();
+
+                    // 根据格式选择加载器
+                    try {
+                        if (format === 'ply') {
+                            result = plyLoader.parse(arrayBuffer);
+                        } else if (format === 'stl') {
+                            result = stlLoader.parse(arrayBuffer);
+                        } else if (format === 'obj') {
+                            result = objLoader.parse(arrayBuffer);
+                        } else {
+                            throw new Error('不支持的格式: ' + format);
+                        }
+                    } catch (parseErr) {
+                        debugLog('  ❌ 加载器解析失败: ' + parseErr.message, true);
+                        return;
+                    }
+
+                    // 统一处理：确保 result 是 Object3D（对于 Geometry 需要包装成 Mesh）
+                    let object;
+                    if (format === 'obj') {
+                        // OBJLoader 返回 Group，直接使用
+                        object = result;
+                        // 给 Group 内的所有 Mesh 设置材质（统一颜色）
+                        const hue = Math.random();
+                        const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
+                        object.traverse(child => {
+                            if (child.isMesh) {
+                                child.material = new THREE.MeshPhongMaterial({
+                                    color: color,
+                                    shininess: 30,
+                                    side: THREE.DoubleSide,
+                                    transparent: true,
+                                    opacity: 0.9
+                                });
+                            }
+                        });
+                    } else {
+                        // PLY/STL 返回 BufferGeometry
+                        const geometry = result;
+                        geometry.computeVertexNormals();
+                        const hue = Math.random();
+                        const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
+                        const material = new THREE.MeshPhongMaterial({
+                            color: color,
+                            shininess: 30,
+                            side: THREE.DoubleSide,
+                            transparent: true,
+                            opacity: 0.9
+                        });
+                        object = new THREE.Mesh(geometry, material);
+                    }
+
+                    object.userData.index = idx;
+                    objects.push(object);
+                    scene.add(object);
+
+                    // 添加复选框
+                    const label = document.createElement('label');
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.checked = true;
+                    checkbox.dataset.index = idx;
+                    checkbox.addEventListener('change', (e) => {
+                        const index = parseInt(e.target.dataset.index);
+                        objects[index].visible = e.target.checked;
+                    });
+                    label.appendChild(checkbox);
+                    label.appendChild(document.createTextNode(' ' + model.name));
+                    checkboxDiv.appendChild(label);
+
+                    loadedCount++;
+                    document.getElementById('stats').innerHTML = \`已加载 \${loadedCount}/\${totalModels} 模型\`;
+
+                    if (loadedCount === totalModels) {
+                        debugLog('所有模型加载完成，调整相机');
+                        const box = new THREE.Box3().setFromObject(scene);
+                        if (!box.isEmpty()) {
+                            const center = box.getCenter(new THREE.Vector3());
+                            const size = box.getSize(new THREE.Vector3()).length();
+                            camera.position.copy(center).add(new THREE.Vector3(0, 0, size * 1.5));
+                            controls.target.copy(center);
+                            controls.update();
+                        } else {
+                            debugLog('场景包围盒为空，可能没有有效几何体', true);
+                        }
+                    }
+                } catch (e) {
+                    debugLog('❌ 模型处理异常: ' + e.message, true);
+                }
+            });
+
+            function animate() {
+                requestAnimationFrame(animate);
+                controls.update();
+                renderer.render(scene, camera);
+            }
+            animate();
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+        } catch (e) {
+            debugLog('🔥 初始化失败: ' + e.message, true);
+        }
+    <\/script>
+</body>
+</html>`;
+
+        return template.replace('__MODEL_DATABASE_PLACEHOLDER__', JSON.stringify(MODEL_DATABASE, null, 2));
+    }
+
+    function downloadViewHtml() {
+        const html = generateViewHtml();
+        const blob = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'view.html';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    // 事件绑定
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const generateBtn = document.getElementById('generateBtn');
+
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+    });
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => { if (e.target.files.length) handleFiles(e.target.files); });
+
+    generateBtn.addEventListener('click', () => {
+        if (MODEL_DATABASE.length === 0) return alert('请先加载模型文件');
+        generateBtn.disabled = true;
+        generateBtn.textContent = '⏳ 生成中...';
+        setTimeout(() => {
+            downloadViewHtml();
+            generateBtn.disabled = false;
+            generateBtn.textContent = '🎯 生成 view.html';
+            document.getElementById('statusText').textContent = 'view.html 已生成';
+        }, 100);
+    });
+
+    document.getElementById('statusDot').className = 'status-dot';
+})();
+</script>
+</body>
+</html>
