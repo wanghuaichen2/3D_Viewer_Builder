@@ -1,11 +1,16 @@
-# 📁 3D模型查看器生成器（支持PLY/STL/OBJ）
+# 📁 3D模型查看/生成器（支持PLY/STL/OBJ）
 
-基于Three.js的离线3D模型查看器生成工具。可以同时拖入最多5个PLY/STL/OBJ模型文件，点击按钮即可生成一个**独立的HTML文件**，该文件包含完整的3D查看器，支持按文件名控制模型的显示/隐藏，方便分享或离线查看。
+基于Three.js的离线3D模型查看器生成工具web。可以同时拖入最多5个PLY/STL/OBJ模型文件，点击按钮即可生成一个**独立的HTML文件**，该文件包含完整的3D查看器，支持按文件名控制模型的显示/隐藏，方便分享或离线查看。
 
 ![主界面截图](images/main-screenshot.png)  
 *（请替换为你的截图）*
 
 ---
+
+## 🤖 AI 开发声明
+
+本项目**完全由 DeepSeek AI 开发实现**，从代码架构、功能设计到最终的交互体验，均由 AI 完成。
+本人仅提出需求、提供反馈并进行细微调整。
 
 ## ✨ 功能特点
 
@@ -64,29 +69,6 @@
 
 ---
 
-## 📸 截图占位
-
-请将以下截图放入`images/`文件夹并替换链接：
-
-- `images/main-screenshot.png` – 主界面截图
-- `images/dropzone.png` – 拖拽区域截图
-- `images/filelist.png` – 文件列表截图
-- `images/viewer.png` – 生成的查看器截图
-
----
-
-## 🤝 贡献指南
-
-欢迎提交Issue或PR！如果你想改进此工具，请遵循以下步骤：
-
-1. Fork本仓库
-2. 创建你的特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交你的修改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 打开一个Pull Request
-
----
-
 ## 📄 许可证
 
 本项目采用 MIT 许可证 – 详情请参见 [LICENSE](LICENSE) 文件。
@@ -96,7 +78,7 @@
 ## 🙏 致谢
 
 - [Three.js](https://threejs.org/) – 强大的3D库
-- 所有贡献者和用户
+- [DeepSeek](https://chat.deepseek.com/) -  完成了本项目的全部代码开发
 
 ---
 
