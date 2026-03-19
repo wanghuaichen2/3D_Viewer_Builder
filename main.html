@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>📁 3D模型查看器生成器（支持PLY/STL/OBJ）</title>
     <style>
+        /* 样式同上，为了节省篇幅此处省略，请保留你原有的完整样式 */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea, #764ba2); min-height: 100vh; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
@@ -77,7 +78,9 @@
         return SUPPORTED_FORMATS.includes(ext) ? ext : null;
     }
 
-    // 解析 PLY 头部获取顶点/面数（仅对 .ply 有效）
+    // ---------- 格式解析函数 ----------
+
+    // 解析 PLY 头部获取顶点/面数
     function parsePLYHeader(arrayBuffer) {
         const text = new TextDecoder('utf-8').decode(arrayBuffer);
         const lines = text.split(/\r?\n/);
@@ -90,6 +93,59 @@
                 faces = parseInt(line.split(/\s+/)[2]) || 0;
             } else if (line === 'end_header') {
                 break;
+            }
+        }
+        return { vertices, faces };
+    }
+
+    // 解析 STL 头部获取顶点/面数
+    function parseSTLHeader(arrayBuffer) {
+        // 检测是 ASCII 还是二进制
+        const header = new Uint8Array(arrayBuffer.slice(0, 80));
+        const headerStr = new TextDecoder('utf-8').decode(header).trim();
+        // 尝试读取面数（二进制格式）
+        const view = new DataView(arrayBuffer);
+        let faces = 0;
+        let vertices = 0;
+
+        // 如果文件大小 > 84 字节，尝试读取第 80-83 字节作为面数（小端）
+        if (arrayBuffer.byteLength >= 84) {
+            const faceCount = view.getUint32(80, true); // 小端
+            // 验证文件大小是否匹配（84 + faceCount * 50）
+            if (arrayBuffer.byteLength === 84 + faceCount * 50) {
+                // 二进制 STL
+                faces = faceCount;
+                vertices = faces * 3;
+                return { vertices, faces, format: 'binary' };
+            }
+        }
+
+        // 否则按 ASCII 处理
+        const text = new TextDecoder('utf-8').decode(arrayBuffer);
+        const lines = text.split(/\r?\n/);
+        let facetCount = 0;
+        for (let line of lines) {
+            line = line.trim().toLowerCase();
+            if (line.startsWith('facet normal')) {
+                facetCount++;
+            }
+        }
+        faces = facetCount;
+        vertices = faces * 3;
+        return { vertices, faces, format: 'ascii' };
+    }
+
+    // 解析 OBJ 头部获取顶点/面数
+    function parseOBJHeader(arrayBuffer) {
+        const text = new TextDecoder('utf-8').decode(arrayBuffer);
+        const lines = text.split(/\r?\n/);
+        let vertices = 0, faces = 0;
+        for (let line of lines) {
+            line = line.trim();
+            if (line.startsWith('v ')) {
+                vertices++;
+            } else if (line.startsWith('f ')) {
+                faces++;
             }
         }
         return { vertices, faces };
@@ -122,15 +178,27 @@
                     const arrayBuffer = e.target.result;
                     let vertices = 0, faces = 0;
 
-                    // 仅对 PLY 解析头部以获取统计信息
                     if (ext === '.ply') {
                         const header = parsePLYHeader(arrayBuffer);
                         vertices = header.vertices;
                         faces = header.faces;
-                    } else {
-                        // STL/OBJ 暂不解析统计信息
-                        vertices = 0;
-                        faces = 0;
+                    } else if (ext === '.stl') {
+                        try {
+                            const header = parseSTLHeader(arrayBuffer);
+                            vertices = header.vertices;
+                            faces = header.faces;
+                        } catch (e) {
+                            console.warn('STL 解析失败', e);
+                            // 保持 0，后续显示 N/A
+                        }
+                    } else if (ext === '.obj') {
+                        try {
+                            const header = parseOBJHeader(arrayBuffer);
+                            vertices = header.vertices;
+                            faces = header.faces;
+                        } catch (e) {
+                            console.warn('OBJ 解析失败', e);
+                        }
                     }
 
                     const base64 = arrayBufferToBase64(arrayBuffer);
@@ -211,7 +279,7 @@
     }
     window.removeFile = index => { MODEL_DATABASE.splice(index, 1); updateFileList(); };
 
-    // 生成最终的 view.html（背景改为渐变）
+    // 生成最终的 view.html（背景改为渐变，修复 OBJ 解析）
     function generateViewHtml() {
         const template = `<!DOCTYPE html>
 <html>
@@ -223,7 +291,7 @@
             margin: 0;
             overflow: hidden;
             font-family: sans-serif;
-            background: linear-gradient(135deg, #667eea, #764ba2); /* 与 main.html 一致的渐变 */
+            background: linear-gradient(135deg, #667eea, #764ba2);
         }
         #controls {
             position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.7);
@@ -297,23 +365,21 @@
             debugLog('Three.js 版本: ' + THREE.REVISION);
 
             const scene = new THREE.Scene();
-            // 不设置 scene.background，因为我们将使用 CSS 渐变背景（通过透明 canvas）
+            // 不设置 scene.background，使用 CSS 渐变
 
             const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(0, 0, 5);
 
-            // 创建渲染器时启用透明
             const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setClearColor(0x000000, 0); // 透明背景
+            renderer.setClearColor(0x000000, 0); // 透明
             document.body.appendChild(renderer.domElement);
 
-            // 阻止右键菜单（防止浏览器前进/后退）
+            // 阻止右键菜单
             renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
             const controls = new THREE.OrbitControls(camera, renderer.domElement);
-            // 左键旋转、右键平移、中键缩放
             controls.mouseButtons = {
                 LEFT: THREE.MOUSE.ROTATE,
                 MIDDLE: THREE.MOUSE.DOLLY,
@@ -334,12 +400,10 @@
             backLight.position.set(-1, -1, -1);
             scene.add(backLight);
 
-            // 存储所有可控制对象（Mesh 或 Group）
             const objects = [];
             let totalModels = MODEL_DATABASE.length;
             let loadedCount = 0;
 
-            // 准备加载器
             const plyLoader = new THREE.PLYLoader();
             const stlLoader = new THREE.STLLoader();
             const objLoader = new THREE.OBJLoader();
@@ -353,17 +417,18 @@
                     debugLog('  - Base64 解码成功，大小: ' + uint8Array.length + ' 字节');
                     const arrayBuffer = uint8Array.buffer;
 
-                    let result = null; // 可以是 Geometry 或 Group
+                    let result = null;
                     const format = model.format.toLowerCase();
 
-                    // 根据格式选择加载器
                     try {
                         if (format === 'ply') {
                             result = plyLoader.parse(arrayBuffer);
                         } else if (format === 'stl') {
                             result = stlLoader.parse(arrayBuffer);
                         } else if (format === 'obj') {
-                            result = objLoader.parse(arrayBuffer);
+                            // OBJLoader.parse 需要字符串，而不是 ArrayBuffer
+                            const text = new TextDecoder('utf-8').decode(arrayBuffer);
+                            result = objLoader.parse(text);
                         } else {
                             throw new Error('不支持的格式: ' + format);
                         }
@@ -372,12 +437,9 @@
                         return;
                     }
 
-                    // 统一处理：确保 result 是 Object3D（对于 Geometry 需要包装成 Mesh）
                     let object;
                     if (format === 'obj') {
-                        // OBJLoader 返回 Group，直接使用
                         object = result;
-                        // 给 Group 内的所有 Mesh 设置材质（统一颜色）
                         const hue = Math.random();
                         const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
                         object.traverse(child => {
@@ -392,7 +454,6 @@
                             }
                         });
                     } else {
-                        // PLY/STL 返回 BufferGeometry
                         const geometry = result;
                         geometry.computeVertexNormals();
                         const hue = Math.random();
@@ -411,7 +472,6 @@
                     objects.push(object);
                     scene.add(object);
 
-                    // 添加复选框
                     const label = document.createElement('label');
                     const checkbox = document.createElement('input');
                     checkbox.type = 'checkbox';
