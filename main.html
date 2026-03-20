@@ -782,12 +782,23 @@ var controls = (function(cam, domEl) {
     };
 })(camera, renderer.domElement);
 
-// Lights
-scene.add(new THREE.AmbientLight(0x707080, 0.9));
-var dl1 = new THREE.DirectionalLight(0xffffff, 1.0);
-dl1.position.set(1, 2, 2); scene.add(dl1);
-var dl2 = new THREE.DirectionalLight(0x8899cc, 0.4);
-dl2.position.set(-2, -1, -2); scene.add(dl2);
+/* ========== 光照设置 ==========                                                                                                                                                                                        
+* 所有光源挂载到 camera 上，跟随视角旋转                                                                                                                                                                                
+* AmbientLight(颜色, 强度)  — 环境光，均匀照亮所有面，无方向                                                                                                                                                            
+* DirectionalLight(颜色, 强度) — 方向光，模拟远处平行光                                                                                                                                                                 
+* 强度范围 0~1，值越大越亮；如果整体太亮，降低下面的数值即可                                                                                                                                                            
+* ============================== */                                                                                                                                                                                     
+// 环境光：强度 0.5（调小则阴影面更暗，调大则整体更亮）                                                                                                                                                                  
+scene.add(new THREE.AmbientLight(0x707080, 0.5));                                                                                                                                                                        
+// 主光源：强度 0.7（从相机右上方照射）                                                                                                                                                                                  
+var dl1 = new THREE.DirectionalLight(0xffffff, 0.7); 
+dl1.position.set(1, 2, 2); 
+camera.add(dl1);  //主光源跟随相机
+// 补光：强度 0.25（从相机左下后方照射，减弱阴影对比）
+var dl2 = new THREE.DirectionalLight(0x8899cc, 0.25);
+dl2.position.set(-2, -1, -2); 
+camera.add(dl2); 
+scene.add(camera);       // camera 必须加入 scene 才能让子节点生效   
 
 // Clipping
 var sceneBounds = null;
