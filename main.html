@@ -293,16 +293,25 @@ body {
     min-height: 100vh;
     user-select: none;
 }
+/* ========== 侧边栏（模型列表浮动面板） ==========
+ * 浮动在页面右上角，半透明毛玻璃背景，不占用画布空间
+ * 画布(canvas)铺满整个窗口，侧边栏悬浮在画布上层
+ * 如需调整透明度，修改 background 中的 alpha 值（当前 0.82）
+ * 如需调整毛玻璃模糊程度，修改 backdrop-filter 的 blur 值（当前 12px） */
 #sidebar {
     position: absolute;
-    top: 0; right: 0; width: 240px;
-    max-height: 100vh;
-    background: rgba(12, 12, 20, 0.97);
-    border-left: 1px solid rgba(255,255,255,0.07);
+    top: 12px; right: 12px; width: 240px;
+    max-height: calc(100vh - 24px);
+    background: rgba(12, 12, 20, 0.82);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
     color: white;
     display: flex;
     flex-direction: column;
     z-index: 10;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
 }
 #sidebar-header {
     padding: 16px 20px;
@@ -317,8 +326,9 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    border-radius: 12px 12px 0 0;
 }
-#sidebar-header:hover { background: rgba(255,255,255,0.03); }
+#sidebar-header:hover { background: rgba(255,255,255,0.05); }
 #sidebar-toggle {
     font-size: 10px;
     transition: transform 0.3s;
@@ -415,9 +425,10 @@ body {
     text-align: right;
     flex-shrink: 0;
 }
+/* 画布铺满整个页面，不再为侧边栏留空 */
 #canvas-container {
     position: absolute;
-    top: 0; left: 0; right: 240px; bottom: 0;
+    top: 0; left: 0; right: 0; bottom: 0;
 }
 #canvas-container canvas {
     display: block;
@@ -427,7 +438,7 @@ body {
 #toolbar {
     position: absolute;
     bottom: 24px;
-    left: calc((100vw - 240px) / 2);
+    left: 50%;
     transform: translateX(-50%);
     display: flex;
     gap: 8px;
@@ -458,12 +469,15 @@ body {
     border-color: #7ec8e3;
     color: #7ec8e3;
 }
+/* 二维截面面板：固定在右下角，可通过左边缘/上边缘等比拖拽缩放 */
 #section-panel {
     position: absolute;
     bottom: 20px;
     right: 20px;
     width: 450px;
     height: 400px;
+    min-width: 250px;
+    min-height: 222px;
     background: rgba(255, 255, 255, 0.88);
     border: 1px solid rgba(180, 180, 180, 0.5);
     border-radius: 12px;
@@ -471,6 +485,27 @@ body {
     display: none;
     overflow: hidden;
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+/* 左边缘拖拽区域 */
+#section-resize-l {
+    position: absolute;
+    top: 0; left: -4px; width: 8px; height: 100%;
+    cursor: ew-resize;
+    z-index: 2;
+}
+/* 上边缘拖拽区域 */
+#section-resize-t {
+    position: absolute;
+    top: -4px; left: 0; width: 100%; height: 8px;
+    cursor: ns-resize;
+    z-index: 2;
+}
+/* 左上角拖拽区域（等比缩放） */
+#section-resize-tl {
+    position: absolute;
+    top: -6px; left: -6px; width: 14px; height: 14px;
+    cursor: nwse-resize;
+    z-index: 3;
 }
 #section-header {
     position: absolute;
@@ -530,6 +565,9 @@ body {
     <button class="tool-btn" id="btn-section">&#9986; 二维截面</button>
 </div>
 <div id="section-panel">
+    <div id="section-resize-tl"></div>
+    <div id="section-resize-t"></div>
+    <div id="section-resize-l"></div>
     <div id="section-header">
         <span id="section-title">二维截面</span>
         <button id="section-close">&times;</button>
@@ -542,7 +580,6 @@ body {
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"><\/script>
 <script>
 var MODEL_DATABASE = __MODEL_DATABASE_PLACEHOLDER__;
-var SIDEBAR_W = 240;
 var COLORS = [0x7ec8e3, 0xf4a261, 0x78d89b, 0xe07878, 0xc8a0f0];
 
 function base64ToUint8Array(b64) {
@@ -552,9 +589,9 @@ function base64ToUint8Array(b64) {
     return arr;
 }
 
-// Scene
+// Scene — 画布铺满整个窗口
 var scene = new THREE.Scene();
-var cw = window.innerWidth - SIDEBAR_W;
+var cw = window.innerWidth;
 var ch = window.innerHeight;
 var camera = new THREE.PerspectiveCamera(45, cw / ch, 0.01, 10000);
 camera.position.set(0, 0, 5);
@@ -579,11 +616,17 @@ var controls = (function(cam, domEl) {
     var maxDist = 10000;
     var zoomDamp = 0.12;
     var rotSpeed = 0.006;
-    // Velocity-based inertia for smooth deceleration
+    /* ========== 旋转惯性（Inertia）开关 ==========
+     * 惯性效果：松开鼠标后模型会继续沿拖动方向缓慢旋转并逐渐停止
+     * 关闭惯性：将 ENABLE_INERTIA 设为 false，松开鼠标后立即停止旋转
+     * 开启惯性：将 ENABLE_INERTIA 设为 true（默认）
+     * 调节惯性强度：修改 inertiaDecay（0~1，越大惯性越持久，推荐 0.88~0.95）
+     * ========================================== */
+    var ENABLE_INERTIA = false;  // true=开启惯性, false=关闭惯性
     var velX = 0;
     var velY = 0;
-    var inertiaDecay = 0.92;
-    var inertiaMin = 0.0005;
+    var inertiaDecay = 0.92;    // 惯性衰减系数，越大滑行越久
+    var inertiaMin = 0.0005;    // 低于此阈值停止惯性旋转
     // Pan offset in camera-local space (target stays at model center)
     var panX = 0;
     var panY = 0;
@@ -662,8 +705,8 @@ var controls = (function(cam, domEl) {
     function onMouseUp(e) {
         if (e.button === 2 && isRotating) {
             isRotating = false;
-            // Average velocity samples for smooth inertia start
-            if (velSamples.length > 0) {
+            // 惯性：将拖动末速度传递为惯性初速度（仅在 ENABLE_INERTIA=true 时生效）
+            if (ENABLE_INERTIA && velSamples.length > 0) {
                 var sx = 0, sy = 0;
                 for (var i = 0; i < velSamples.length; i++) {
                     sx += velSamples[i].x;
@@ -671,6 +714,8 @@ var controls = (function(cam, domEl) {
                 }
                 velX = sx / velSamples.length;
                 velY = sy / velSamples.length;
+            } else {
+                velX = 0; velY = 0;
             }
             velSamples.length = 0;
         }
@@ -714,8 +759,8 @@ var controls = (function(cam, domEl) {
             velX = 0; velY = 0;
         },
         update: function() {
-            // Apply inertia when not dragging
-            if (!isRotating && (Math.abs(velX) > inertiaMin || Math.abs(velY) > inertiaMin)) {
+            // 惯性旋转：松开鼠标后继续旋转并逐渐停止（受 ENABLE_INERTIA 控制）
+            if (ENABLE_INERTIA && !isRotating && (Math.abs(velX) > inertiaMin || Math.abs(velY) > inertiaMin)) {
                 applyRotation(velX, velY);
                 velX *= inertiaDecay;
                 velY *= inertiaDecay;
@@ -938,7 +983,11 @@ document.getElementById('btn-section').addEventListener('click', function() {
     sectionEnabled = !sectionEnabled;
     this.classList.toggle('active', sectionEnabled);
     if (sectionEnabled) {
-        document.getElementById('section-panel').style.display = 'block';
+        var sp = document.getElementById('section-panel');
+        sp.style.display = 'block';
+        // 重置为右下角默认位置
+        sp.style.top = 'auto'; sp.style.left = 'auto';
+        sp.style.bottom = '20px'; sp.style.right = '20px';
         initSectionCanvas();
         resizeOverlay();
         drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
@@ -958,6 +1007,100 @@ document.getElementById('section-close').addEventListener('click', function() {
     drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
     renderer.domElement.style.cursor = '';
 });
+
+// ========== 截面面板拖动移动 + 等比缩放 ==========
+// 统一管理面板定位：始终使用右下角(bottom/right)作为锚点
+// 拖动标题栏移动面板，拖拽边缘等比缩放（右下角固定）
+(function() {
+    var panel = document.getElementById('section-panel');
+    var header = document.getElementById('section-header');
+    var ASPECT = 450 / 400;
+    var MIN_W = 250;
+    var MIN_H = MIN_W / ASPECT;
+    var MAX_W = 900;
+    var mode = ''; // 'drag' | 'resize'
+    // 拖动状态
+    var dragStartRight, dragStartBottom, dragMouseX, dragMouseY;
+    // 缩放状态
+    var resizeStartX, resizeStartY, resizeStartW, resizeStartH;
+
+    header.style.cursor = 'move';
+
+    // --- 拖动：通过修改 bottom/right 实现，始终保持该定位模式 ---
+    header.addEventListener('mousedown', function(e) {
+        if (e.target.id === 'section-close') return;
+        e.preventDefault();
+        mode = 'drag';
+        // 确保使用 bottom/right 定位
+        ensureBottomRight();
+        dragStartRight = parseInt(panel.style.right) || 20;
+        dragStartBottom = parseInt(panel.style.bottom) || 20;
+        dragMouseX = e.clientX;
+        dragMouseY = e.clientY;
+    });
+
+    // --- 缩放：始终以右下角为锚点 ---
+    function beginResize(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        mode = 'resize';
+        ensureBottomRight();
+        resizeStartX = e.clientX;
+        resizeStartY = e.clientY;
+        resizeStartW = panel.offsetWidth;
+        resizeStartH = panel.offsetHeight;
+        document.body.style.cursor = e.target.id === 'section-resize-l' ? 'ew-resize'
+            : e.target.id === 'section-resize-t' ? 'ns-resize' : 'nwse-resize';
+    }
+
+    // 确保面板使用 bottom/right 定位（如果之前被改成了 top/left 则转回来）
+    function ensureBottomRight() {
+        if (panel.style.bottom === 'auto' || !panel.style.bottom) {
+            var rect = panel.getBoundingClientRect();
+            panel.style.bottom = (window.innerHeight - rect.bottom) + 'px';
+            panel.style.right = (window.innerWidth - rect.right) + 'px';
+            panel.style.top = 'auto';
+            panel.style.left = 'auto';
+        }
+    }
+
+    window.addEventListener('mousemove', function(e) {
+        if (mode === 'drag') {
+            // 鼠标右移 → right 减小，鼠标下移 → bottom 减小
+            var newRight = dragStartRight - (e.clientX - dragMouseX);
+            var newBottom = dragStartBottom - (e.clientY - dragMouseY);
+            // 限制在窗口内
+            var maxRight = window.innerWidth - panel.offsetWidth;
+            var maxBottom = window.innerHeight - panel.offsetHeight;
+            newRight = Math.max(0, Math.min(maxRight, newRight));
+            newBottom = Math.max(0, Math.min(maxBottom, newBottom));
+            panel.style.right = newRight + 'px';
+            panel.style.bottom = newBottom + 'px';
+        }
+        if (mode === 'resize') {
+            var dx = resizeStartX - e.clientX;
+            var dy = resizeStartY - e.clientY;
+            var delta = Math.abs(dx) > Math.abs(dy) ? dx : dy * ASPECT;
+            var newW = Math.max(MIN_W, Math.min(MAX_W, resizeStartW + delta));
+            var newH = newW / ASPECT;
+            if (newH < MIN_H) { newH = MIN_H; newW = newH * ASPECT; }
+            panel.style.width = newW + 'px';
+            panel.style.height = newH + 'px';
+            initSectionCanvas();
+        }
+    });
+
+    window.addEventListener('mouseup', function() {
+        if (mode) {
+            mode = '';
+            document.body.style.cursor = '';
+        }
+    });
+
+    document.getElementById('section-resize-l').addEventListener('mousedown', beginResize);
+    document.getElementById('section-resize-t').addEventListener('mousedown', beginResize);
+    document.getElementById('section-resize-tl').addEventListener('mousedown', beginResize);
+})();
 
 renderer.domElement.addEventListener('mousedown', function(e) {
     if (e.button !== 0 || !sectionEnabled) return;
@@ -1100,7 +1243,7 @@ function animate() {
 animate();
 
 window.addEventListener('resize', function() {
-    var w = window.innerWidth - SIDEBAR_W;
+    var w = window.innerWidth;
     var h = window.innerHeight;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
