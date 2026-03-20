@@ -189,7 +189,6 @@
                             faces = header.faces;
                         } catch (e) {
                             console.warn('STL 解析失败', e);
-                            // 保持 0，后续显示 N/A
                         }
                     } else if (ext === '.obj') {
                         try {
@@ -207,7 +206,7 @@
 
                     resolve({
                         name: file.name,
-                        format: ext.substring(1), // 不带点: 'ply', 'stl', 'obj'
+                        format: ext.substring(1),
                         data: base64,
                         vertices: vertices,
                         faces: faces,
@@ -279,252 +278,837 @@
     }
     window.removeFile = index => { MODEL_DATABASE.splice(index, 1); updateFileList(); };
 
-    // 生成最终的 view.html（背景改为渐变，修复 OBJ 解析）
+    // 生成 view.html
     function generateViewHtml() {
         const template = `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>3D 模型查看器</title>
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            font-family: sans-serif;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-        }
-        #controls {
-            position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.7);
-            color: white; padding: 15px; border-radius: 8px; z-index: 100;
-            max-height: 80vh; overflow-y: auto;
-        }
-        #controls label { display: block; margin: 5px 0; cursor: pointer; }
-        #controls input { margin-right: 8px; }
-        #debugPanel {
-            position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.8);
-            color: #0f0; padding: 15px; border-radius: 8px; z-index: 200;
-            max-width: 400px; max-height: 80vh; overflow: auto;
-            font-family: monospace; font-size: 12px;
-        }
-        .stats { position: absolute; bottom: 20px; left: 20px; color: #ccc; font-size: 12px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; }
-        .error { color: #f88; }
-    </style>
-</head>
-<body>
-    <div id="controls">
-        <h3 style="margin-top:0;">模型显示控制</h3>
-        <div id="checkboxes"></div>
+<html><head>
+<meta charset="UTF-8">
+<title>3D 模型查看器</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    overflow: hidden;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    min-height: 100vh;
+    user-select: none;
+}
+#sidebar {
+    position: absolute;
+    top: 0; right: 0; width: 240px;
+    max-height: 100vh;
+    background: rgba(12, 12, 20, 0.97);
+    border-left: 1px solid rgba(255,255,255,0.07);
+    color: white;
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+}
+#sidebar-header {
+    padding: 16px 20px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #7ec8e3;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+#sidebar-header:hover { background: rgba(255,255,255,0.03); }
+#sidebar-toggle {
+    font-size: 10px;
+    transition: transform 0.3s;
+    color: #7ec8e3;
+}
+#sidebar-toggle.collapsed { transform: rotate(-90deg); }
+#model-list.collapsed {
+    display: none !important;
+}
+#model-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+}
+#model-list::-webkit-scrollbar { width: 4px; }
+#model-list::-webkit-scrollbar-track { background: transparent; }
+#model-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+.model-item {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 8px;
+    transition: background 0.2s;
+}
+.model-item:hover { background: rgba(255,255,255,0.07); }
+.model-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.vis-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    width: 20px; height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.2s;
+}
+.vis-btn svg { width: 18px; height: 14px; }
+.vis-btn.off { opacity: 0.3; }
+.model-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.model-name {
+    font-size: 12px;
+    color: #ccc;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.opacity-section {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.opacity-icon {
+    font-size: 11px;
+    color: #555;
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+}
+.opacity-range {
+    -webkit-appearance: none;
+    flex: 1;
+    height: 5px;
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+    background: linear-gradient(to right, #7ec8e3 100%, #2a2a3a 100%);
+}
+.opacity-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: white;
+    border: 2px solid #7ec8e3;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+}
+.opacity-pct {
+    font-size: 10px;
+    color: #555;
+    width: 30px;
+    text-align: right;
+    flex-shrink: 0;
+}
+#canvas-container {
+    position: absolute;
+    top: 0; left: 0; right: 240px; bottom: 0;
+}
+#canvas-container canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+}
+#toolbar {
+    position: absolute;
+    bottom: 24px;
+    left: calc((100vw - 240px) / 2);
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    z-index: 20;
+}
+.tool-btn {
+    background: rgba(12, 12, 20, 0.92);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #aaa;
+    padding: 9px 18px;
+    border-radius: 22px;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+.tool-btn:hover {
+    background: rgba(35, 35, 55, 0.98);
+    border-color: rgba(255,255,255,0.2);
+    color: white;
+}
+.tool-btn.active {
+    background: rgba(126,200,227,0.12);
+    border-color: #7ec8e3;
+    color: #7ec8e3;
+}
+#section-panel {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 450px;
+    height: 400px;
+    background: rgba(255, 255, 255, 0.88);
+    border: 1px solid rgba(180, 180, 180, 0.5);
+    border-radius: 12px;
+    z-index: 20;
+    display: none;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+#section-header {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    background: rgba(240,240,240,0.9);
+    border-bottom: 1px solid rgba(200,200,200,0.4);
+    border-radius: 12px 12px 0 0;
+    z-index: 1;
+}
+#section-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #555;
+}
+#section-close {
+    background: none;
+    border: none;
+    width: 20px; height: 20px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #888;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.2s;
+}
+#section-close:hover {
+    background: rgba(0,0,0,0.1);
+    color: #333;
+}
+#section-canvas {
+    position: absolute;
+    top: 32px; left: 0; right: 0; bottom: 0;
+}
+#draw-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 5;
+}
+</style>
+</head><body>
+<div id="sidebar">
+    <div id="sidebar-header" onclick="var l=document.getElementById('model-list'),t=document.getElementById('sidebar-toggle');l.classList.toggle('collapsed');t.classList.toggle('collapsed');">模型列表 <span id="sidebar-toggle">&#9660;</span></div>
+    <div id="model-list"></div>
+</div>
+<div id="canvas-container"><canvas id="draw-overlay"></canvas></div>
+<div id="toolbar">
+    <button class="tool-btn" id="btn-reset">&#8635; 重置视角</button>
+    <button class="tool-btn" id="btn-section">&#9986; 二维截面</button>
+</div>
+<div id="section-panel">
+    <div id="section-header">
+        <span id="section-title">二维截面</span>
+        <button id="section-close">&times;</button>
     </div>
-    <div id="debugPanel">
-        <h4 style="margin:0 0 8px 0;">🔍 调试信息</h4>
-        <div id="log"></div>
-    </div>
-    <div class="stats" id="stats">等待模型加载...</div>
+    <canvas id="section-canvas"></canvas>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"><\/script>
+<script>
+var MODEL_DATABASE = __MODEL_DATABASE_PLACEHOLDER__;
+var SIDEBAR_W = 240;
+var COLORS = [0x7ec8e3, 0xf4a261, 0x78d89b, 0xe07878, 0xc8a0f0];
 
-    <!-- 加载 Three.js 核心库及各种加载器 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"><\/script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"><\/script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"><\/script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"><\/script>
+function base64ToUint8Array(b64) {
+    var bin = atob(b64);
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+}
 
-    <script>
-        // 调试日志
-        const logDiv = document.getElementById('log');
-        function debugLog(msg, isError = false) {
-            const line = document.createElement('div');
-            line.textContent = msg;
-            if (isError) line.style.color = '#f88';
-            logDiv.appendChild(line);
-            console.log(msg);
+// Scene
+var scene = new THREE.Scene();
+var cw = window.innerWidth - SIDEBAR_W;
+var ch = window.innerHeight;
+var camera = new THREE.PerspectiveCamera(45, cw / ch, 0.01, 10000);
+camera.position.set(0, 0, 5);
+
+var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(cw, ch);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x000000, 0);
+document.getElementById('canvas-container').appendChild(renderer.domElement);
+renderer.domElement.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+// Quaternion Trackball Controller — true free rotation, no gimbal lock
+// Uses accumulated quaternion orientation instead of euler/spherical
+// Right-click drag = rotate, middle-click drag = pan, scroll = zoom
+var controls = (function(cam, domEl) {
+    var target = new THREE.Vector3();
+    // Core state: orientation quaternion + distance (no offset vector decomposition)
+    var orientation = new THREE.Quaternion(); // accumulated rotation quaternion
+    var dist = 5;
+    var targetDist = 5;
+    var minDist = 0.01;
+    var maxDist = 10000;
+    var zoomDamp = 0.12;
+    var rotSpeed = 0.006;
+    // Velocity-based inertia for smooth deceleration
+    var velX = 0;
+    var velY = 0;
+    var inertiaDecay = 0.92;
+    var inertiaMin = 0.0005;
+    // Pan offset in camera-local space (target stays at model center)
+    var panX = 0;
+    var panY = 0;
+    // Mouse state
+    var isRotating = false;
+    var isPanning = false;
+    var prevX = 0;
+    var prevY = 0;
+    // Velocity sampling: average last N frames for stable inertia
+    var velSamples = [];
+    var maxSamples = 4;
+
+    // Compute camera axes from current orientation quaternion
+    function getCamRight() {
+        return new THREE.Vector3(1, 0, 0).applyQuaternion(orientation);
+    }
+    function getCamUp() {
+        return new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
+    }
+    function getCamForward() {
+        return new THREE.Vector3(0, 0, 1).applyQuaternion(orientation);
+    }
+
+    // Apply rotation delta to the accumulated quaternion
+    // dx/dy are in "rotation angle" units, not pixels
+    function applyRotation(dx, dy) {
+        // Build rotation quaternions around current camera-local axes
+        var right = getCamRight();
+        var up = getCamUp();
+        var qYaw = new THREE.Quaternion().setFromAxisAngle(up, -dx);
+        var qPitch = new THREE.Quaternion().setFromAxisAngle(right, -dy);
+        // Combine: first yaw then pitch (order matters for natural feel)
+        var delta = new THREE.Quaternion().multiplyQuaternions(qPitch, qYaw);
+        // Accumulate into orientation
+        orientation.premultiply(delta);
+        orientation.normalize();
+    }
+
+    function onMouseDown(e) {
+        if (e.button === 2) {
+            isRotating = true;
+            prevX = e.clientX;
+            prevY = e.clientY;
+            velX = 0; velY = 0;
+            velSamples.length = 0;
+        } else if (e.button === 1) {
+            isPanning = true;
+            prevX = e.clientX;
+            prevY = e.clientY;
+            e.preventDefault();
         }
-        window.onerror = function(msg, url, line) {
-            debugLog('🚨 全局错误: ' + msg + ' (行 ' + line + ')', true);
-        };
+    }
 
-        try {
-            // ---------- 模型数据 ----------
-            const MODEL_DATABASE = __MODEL_DATABASE_PLACEHOLDER__;
-            debugLog('模型总数: ' + MODEL_DATABASE.length);
+    function onMouseMove(e) {
+        if (isRotating) {
+            var dx = (e.clientX - prevX) * rotSpeed;
+            var dy = (e.clientY - prevY) * rotSpeed;
+            prevX = e.clientX;
+            prevY = e.clientY;
+            applyRotation(dx, dy);
+            // Record velocity sample
+            velSamples.push({ x: dx, y: dy });
+            if (velSamples.length > maxSamples) velSamples.shift();
+        }
+        if (isPanning) {
+            var dx = e.clientX - prevX;
+            var dy = e.clientY - prevY;
+            prevX = e.clientX;
+            prevY = e.clientY;
+            var panScale = dist * 0.0015;
+            panX -= dx * panScale;
+            panY += dy * panScale;
+        }
+    }
 
-            // Base64 转 ArrayBuffer
-            function base64ToUint8Array(base64) {
-                try {
-                    const binary = atob(base64);
-                    const len = binary.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-                    return bytes;
-                } catch (e) {
-                    throw new Error('Base64 解码失败: ' + e.message);
+    function onMouseUp(e) {
+        if (e.button === 2 && isRotating) {
+            isRotating = false;
+            // Average velocity samples for smooth inertia start
+            if (velSamples.length > 0) {
+                var sx = 0, sy = 0;
+                for (var i = 0; i < velSamples.length; i++) {
+                    sx += velSamples[i].x;
+                    sy += velSamples[i].y;
                 }
+                velX = sx / velSamples.length;
+                velY = sy / velSamples.length;
             }
+            velSamples.length = 0;
+        }
+        if (e.button === 1) {
+            isPanning = false;
+        }
+    }
 
-            // 初始化 Three.js
-            if (typeof THREE === 'undefined') throw new Error('Three.js 未加载！');
-            debugLog('Three.js 版本: ' + THREE.REVISION);
+    function onWheel(e) {
+        e.preventDefault();
+        var factor = e.deltaY > 0 ? 1.1 : (1 / 1.1);
+        targetDist = Math.max(minDist, Math.min(maxDist, targetDist * factor));
+    }
 
-            const scene = new THREE.Scene();
-            // 不设置 scene.background，使用 CSS 渐变
+    domEl.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    domEl.addEventListener('wheel', onWheel, { passive: false });
 
-            const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 0, 5);
+    return {
+        target: target,
+        setMinDist: function(v) { minDist = v; },
+        setMaxDist: function(v) { maxDist = v; },
+        init: function(d, tgt) {
+            dist = d; targetDist = d;
+            orientation.identity();
+            target.copy(tgt);
+            panX = 0; panY = 0;
+            velX = 0; velY = 0;
+        },
+        getState: function() {
+            return { q: orientation.clone(), dist: dist, panX: panX, panY: panY };
+        },
+        resetTo: function(state, tgt) {
+            orientation.copy(state.q);
+            dist = state.dist;
+            targetDist = state.dist;
+            target.copy(tgt);
+            panX = state.panX || 0;
+            panY = state.panY || 0;
+            velX = 0; velY = 0;
+        },
+        update: function() {
+            // Apply inertia when not dragging
+            if (!isRotating && (Math.abs(velX) > inertiaMin || Math.abs(velY) > inertiaMin)) {
+                applyRotation(velX, velY);
+                velX *= inertiaDecay;
+                velY *= inertiaDecay;
+                if (Math.abs(velX) < inertiaMin) velX = 0;
+                if (Math.abs(velY) < inertiaMin) velY = 0;
+            }
+            // Smooth zoom interpolation
+            dist += (targetDist - dist) * zoomDamp;
+            // Compute camera position: orbit around target (model center)
+            var forward = getCamForward();
+            var right = getCamRight();
+            var up = getCamUp();
+            // Camera orbits target, then pan offsets both camera and lookAt
+            var panOffsetVec = right.clone().multiplyScalar(panX).addScaledVector(up, panY);
+            cam.position.copy(target).addScaledVector(forward, dist).add(panOffsetVec);
+            cam.up.copy(up);
+            cam.lookAt(target.clone().add(panOffsetVec));
+        }
+    };
+})(camera, renderer.domElement);
 
-            const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setClearColor(0x000000, 0); // 透明
-            document.body.appendChild(renderer.domElement);
+// Lights
+scene.add(new THREE.AmbientLight(0x707080, 0.9));
+var dl1 = new THREE.DirectionalLight(0xffffff, 1.0);
+dl1.position.set(1, 2, 2); scene.add(dl1);
+var dl2 = new THREE.DirectionalLight(0x8899cc, 0.4);
+dl2.position.set(-2, -1, -2); scene.add(dl2);
 
-            // 阻止右键菜单
-            renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+// Clipping
+var sceneBounds = null;
+var modelObjects = [];
+var loadedCount = 0;
+var totalModels = MODEL_DATABASE.length;
 
-            const controls = new THREE.OrbitControls(camera, renderer.domElement);
-            controls.mouseButtons = {
-                LEFT: THREE.MOUSE.ROTATE,
-                MIDDLE: THREE.MOUSE.DOLLY,
-                RIGHT: THREE.MOUSE.PAN
-            };
-            controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
-            controls.screenSpacePanning = true;
-            controls.maxPolarAngle = Math.PI / 2;
+var plyLoader = new THREE.PLYLoader();
+var stlLoader = new THREE.STLLoader();
+var objLoader = new THREE.OBJLoader();
 
-            // 灯光
-            const ambientLight = new THREE.AmbientLight(0x404060);
-            scene.add(ambientLight);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-            dirLight.position.set(1, 2, 1);
-            scene.add(dirLight);
-            const backLight = new THREE.DirectionalLight(0x555555, 0.5);
-            backLight.position.set(-1, -1, -1);
-            scene.add(backLight);
+MODEL_DATABASE.forEach(function(model, idx) {
+    try {
+        var bytes = base64ToUint8Array(model.data);
+        var buf = bytes.buffer;
+        var fmt = model.format.toLowerCase();
+        var color = COLORS[idx % COLORS.length];
+        var mat = new THREE.MeshPhongMaterial({
+            color: color, shininess: 40,
+            side: THREE.DoubleSide,
+            transparent: false, opacity: 1.0
+        });
+        var obj;
+        if (fmt === 'ply') {
+            var pGeo = plyLoader.parse(buf);
+            pGeo.computeVertexNormals();
+            obj = new THREE.Mesh(pGeo, mat);
+        } else if (fmt === 'stl') {
+            var sGeo = stlLoader.parse(buf);
+            sGeo.computeVertexNormals();
+            obj = new THREE.Mesh(sGeo, mat);
+        } else if (fmt === 'obj') {
+            var txt = new TextDecoder('utf-8').decode(buf);
+            obj = objLoader.parse(txt);
+            obj.traverse(function(child) {
+                if (child.isMesh) child.material = mat.clone();
+            });
+        }
+        if (!obj) return;
+        scene.add(obj);
+        modelObjects.push({ object: obj });
+        loadedCount++;
+        // 侧边栏条目
+        var item = document.createElement('div');
+        item.className = 'model-item';
 
-            const objects = [];
-            let totalModels = MODEL_DATABASE.length;
-            let loadedCount = 0;
+        var header = document.createElement('div');
+        header.className = 'model-header';
 
-            const plyLoader = new THREE.PLYLoader();
-            const stlLoader = new THREE.STLLoader();
-            const objLoader = new THREE.OBJLoader();
+        var visBtn = document.createElement('button');
+        visBtn.className = 'vis-btn';
+        visBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#7ec8e3" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        visBtn.title = '切换显示/隐藏';
+        (function(o, btn) {
+            var eyeOpen = '<svg viewBox="0 0 24 24" fill="none" stroke="#7ec8e3" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+            var eyeClosed = '<svg viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+            btn.addEventListener('click', function() {
+                o.visible = !o.visible;
+                btn.classList.toggle('off', !o.visible);
+                btn.innerHTML = o.visible ? eyeOpen : eyeClosed;
+            });
+        })(obj, visBtn);
 
-            const checkboxDiv = document.getElementById('checkboxes');
+        var dot = document.createElement('span');
+        dot.className = 'model-dot';
+        dot.style.background = '#' + color.toString(16).padStart(6, '0');
 
-            MODEL_DATABASE.forEach((model, idx) => {
-                debugLog('处理模型 ' + (idx+1) + ': ' + model.name + ' (格式: ' + model.format + ')');
-                try {
-                    const uint8Array = base64ToUint8Array(model.data);
-                    debugLog('  - Base64 解码成功，大小: ' + uint8Array.length + ' 字节');
-                    const arrayBuffer = uint8Array.buffer;
+        var nameSpan = document.createElement('span');
+        nameSpan.className = 'model-name';
+        nameSpan.textContent = model.name;
+        nameSpan.title = model.name;
 
-                    let result = null;
-                    const format = model.format.toLowerCase();
+        header.appendChild(visBtn);
+        header.appendChild(dot);
+        header.appendChild(nameSpan);
 
-                    try {
-                        if (format === 'ply') {
-                            result = plyLoader.parse(arrayBuffer);
-                        } else if (format === 'stl') {
-                            result = stlLoader.parse(arrayBuffer);
-                        } else if (format === 'obj') {
-                            // OBJLoader.parse 需要字符串，而不是 ArrayBuffer
-                            const text = new TextDecoder('utf-8').decode(arrayBuffer);
-                            result = objLoader.parse(text);
-                        } else {
-                            throw new Error('不支持的格式: ' + format);
-                        }
-                    } catch (parseErr) {
-                        debugLog('  ❌ 加载器解析失败: ' + parseErr.message, true);
-                        return;
+        var opRow = document.createElement('div');
+        opRow.className = 'opacity-section';
+
+        var opIcon = document.createElement('span');
+        opIcon.className = 'opacity-icon';
+        opIcon.textContent = String.fromCharCode(9681);
+
+        var opSlider = document.createElement('input');
+        opSlider.type = 'range';
+        opSlider.className = 'opacity-range';
+        opSlider.min = '0'; opSlider.max = '100'; opSlider.value = '100';
+        opSlider.style.background = 'linear-gradient(to right, #7ec8e3 100%, #2a2a3a 100%)';
+
+        var opPct = document.createElement('span');
+        opPct.className = 'opacity-pct';
+        opPct.textContent = '100%';
+
+        (function(o, slider, valEl) {
+            slider.addEventListener('input', function() {
+                var v = parseInt(this.value) / 100;
+                valEl.textContent = this.value + '%';
+                var pct = this.value + '%';
+                this.style.background = 'linear-gradient(to right, #7ec8e3 ' + pct + ', #2a2a3a ' + pct + ')';
+                o.traverse(function(child) {
+                    if (child.isMesh) {
+                        child.material.opacity = v;
+                        child.material.transparent = v < 1.0;
+                        child.material.needsUpdate = true;
                     }
-
-                    let object;
-                    if (format === 'obj') {
-                        object = result;
-                        const hue = Math.random();
-                        const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
-                        object.traverse(child => {
-                            if (child.isMesh) {
-                                child.material = new THREE.MeshPhongMaterial({
-                                    color: color,
-                                    shininess: 30,
-                                    side: THREE.DoubleSide,
-                                    transparent: true,
-                                    opacity: 0.9
-                                });
-                            }
-                        });
-                    } else {
-                        const geometry = result;
-                        geometry.computeVertexNormals();
-                        const hue = Math.random();
-                        const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
-                        const material = new THREE.MeshPhongMaterial({
-                            color: color,
-                            shininess: 30,
-                            side: THREE.DoubleSide,
-                            transparent: true,
-                            opacity: 0.9
-                        });
-                        object = new THREE.Mesh(geometry, material);
-                    }
-
-                    object.userData.index = idx;
-                    objects.push(object);
-                    scene.add(object);
-
-                    const label = document.createElement('label');
-                    const checkbox = document.createElement('input');
-                    checkbox.type = 'checkbox';
-                    checkbox.checked = true;
-                    checkbox.dataset.index = idx;
-                    checkbox.addEventListener('change', (e) => {
-                        const index = parseInt(e.target.dataset.index);
-                        objects[index].visible = e.target.checked;
-                    });
-                    label.appendChild(checkbox);
-                    label.appendChild(document.createTextNode(' ' + model.name));
-                    checkboxDiv.appendChild(label);
-
-                    loadedCount++;
-                    document.getElementById('stats').innerHTML = \`已加载 \${loadedCount}/\${totalModels} 模型\`;
-
-                    if (loadedCount === totalModels) {
-                        debugLog('所有模型加载完成，调整相机');
-                        const box = new THREE.Box3().setFromObject(scene);
-                        if (!box.isEmpty()) {
-                            const center = box.getCenter(new THREE.Vector3());
-                            const size = box.getSize(new THREE.Vector3()).length();
-                            camera.position.copy(center).add(new THREE.Vector3(0, 0, size * 1.5));
-                            controls.target.copy(center);
-                            controls.update();
-                        } else {
-                            debugLog('场景包围盒为空，可能没有有效几何体', true);
-                        }
-                    }
-                } catch (e) {
-                    debugLog('❌ 模型处理异常: ' + e.message, true);
+                });
+                if (o.isMesh) {
+                    o.material.opacity = v;
+                    o.material.transparent = v < 1.0;
+                    o.material.needsUpdate = true;
                 }
             });
+        })(obj, opSlider, opPct);
 
-            function animate() {
-                requestAnimationFrame(animate);
-                controls.update();
-                renderer.render(scene, camera);
-            }
-            animate();
+        opRow.appendChild(opIcon);
+        opRow.appendChild(opSlider);
+        opRow.appendChild(opPct);
+        item.appendChild(header);
+        item.appendChild(opRow);
+        document.getElementById('model-list').appendChild(item);
 
-            window.addEventListener('resize', () => {
-                camera.aspect = window.innerWidth / window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(window.innerWidth, window.innerHeight);
-            });
-
-        } catch (e) {
-            debugLog('🔥 初始化失败: ' + e.message, true);
+        if (loadedCount === totalModels) {
+            fitCamera();
         }
-    <\/script>
-</body>
-</html>`;
+    } catch(e) {
+        console.error('模型加载失败:', model.name, e);
+    }
+});
+
+function fitCamera() {
+    var box = new THREE.Box3();
+    scene.traverse(function(child) {
+        if (child.isMesh) box.expandByObject(child);
+    });
+    if (!box.isEmpty()) {
+        sceneBounds = box;
+        var center = box.getCenter(new THREE.Vector3());
+        var size = box.getSize(new THREE.Vector3());
+        var maxDim = Math.max(size.x, size.y, size.z);
+        camera.near = maxDim * 0.001;
+        camera.far = maxDim * 200;
+        camera.updateProjectionMatrix();
+        var initDist = maxDim * 2;
+        controls.init(initDist, center);
+        controls.setMinDist(maxDim * 0.05);
+        controls.setMaxDist(maxDim * 20);
+        controls.update();
+        window.__initState = controls.getState();
+        window.__initTarget = controls.target.clone();
+    }
+}
+
+document.getElementById('btn-reset').addEventListener('click', function() {
+    if (window.__initState) {
+        controls.resetTo(window.__initState, window.__initTarget);
+    }
+});
+
+// 二维截面工具
+var sectionEnabled = false;
+var drawOverlay = document.getElementById('draw-overlay');
+var drawCtx = drawOverlay.getContext('2d');
+var sectionCanvas = document.getElementById('section-canvas');
+var sectionCtx = null;
+var isDrawing = false;
+var drawStart = null;
+var drawEnd = null;
+
+function initSectionCanvas() {
+    var panel = document.getElementById('section-panel');
+    sectionCanvas.width = panel.clientWidth;
+    sectionCanvas.height = panel.clientHeight - 32;
+    sectionCtx = sectionCanvas.getContext('2d');
+}
+
+function resizeOverlay() {
+    var container = document.getElementById('canvas-container');
+    drawOverlay.width = container.clientWidth;
+    drawOverlay.height = container.clientHeight;
+}
+
+function drawHintText() {
+    if (!sectionCtx) return;
+    sectionCtx.clearRect(0, 0, sectionCanvas.width, sectionCanvas.height);
+    sectionCtx.fillStyle = '#aaa';
+    sectionCtx.font = '12px sans-serif';
+    sectionCtx.textAlign = 'center';
+    sectionCtx.fillText('在3D视图上左键画线', sectionCanvas.width / 2, sectionCanvas.height / 2 - 8);
+    sectionCtx.fillText('以生成截面', sectionCanvas.width / 2, sectionCanvas.height / 2 + 12);
+}
+
+document.getElementById('btn-section').addEventListener('click', function() {
+    sectionEnabled = !sectionEnabled;
+    this.classList.toggle('active', sectionEnabled);
+    if (sectionEnabled) {
+        document.getElementById('section-panel').style.display = 'block';
+        initSectionCanvas();
+        resizeOverlay();
+        drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
+        drawHintText();
+        renderer.domElement.style.cursor = 'crosshair';
+    } else {
+        document.getElementById('section-panel').style.display = 'none';
+        drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
+        renderer.domElement.style.cursor = '';
+    }
+});
+
+document.getElementById('section-close').addEventListener('click', function() {
+    sectionEnabled = false;
+    document.getElementById('btn-section').classList.remove('active');
+    document.getElementById('section-panel').style.display = 'none';
+    drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
+    renderer.domElement.style.cursor = '';
+});
+
+renderer.domElement.addEventListener('mousedown', function(e) {
+    if (e.button !== 0 || !sectionEnabled) return;
+    isDrawing = true;
+    var rect = renderer.domElement.getBoundingClientRect();
+    drawStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    drawEnd = null;
+    resizeOverlay();
+    drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
+});
+
+renderer.domElement.addEventListener('mousemove', function(e) {
+    if (!isDrawing || !sectionEnabled) return;
+    var rect = renderer.domElement.getBoundingClientRect();
+    drawEnd = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
+    drawCtx.beginPath();
+    drawCtx.moveTo(drawStart.x, drawStart.y);
+    drawCtx.lineTo(drawEnd.x, drawEnd.y);
+    drawCtx.strokeStyle = 'rgba(126,200,227,0.8)';
+    drawCtx.lineWidth = 2;
+    drawCtx.setLineDash([6, 4]);
+    drawCtx.stroke();
+    drawCtx.setLineDash([]);
+});
+
+renderer.domElement.addEventListener('mouseup', function(e) {
+    if (e.button !== 0 || !isDrawing || !sectionEnabled) return;
+    isDrawing = false;
+    if (!drawStart || !drawEnd) return;
+    var dx = drawEnd.x - drawStart.x;
+    var dy = drawEnd.y - drawStart.y;
+    if (Math.sqrt(dx * dx + dy * dy) < 10) return;
+    computeAndDrawSection();
+    drawCtx.clearRect(0, 0, drawOverlay.width, drawOverlay.height);
+});
+
+function computeAndDrawSection() {
+    var ow = drawOverlay.width;
+    var oh = drawOverlay.height;
+    var ndcX1 = (drawStart.x / ow) * 2 - 1;
+    var ndcY1 = -(drawStart.y / oh) * 2 + 1;
+    var ndcX2 = (drawEnd.x / ow) * 2 - 1;
+    var ndcY2 = -(drawEnd.y / oh) * 2 + 1;
+
+    var near1 = new THREE.Vector3(ndcX1, ndcY1, -1).unproject(camera);
+    var near2 = new THREE.Vector3(ndcX2, ndcY2, -1).unproject(camera);
+    var far1 = new THREE.Vector3(ndcX1, ndcY1, 1).unproject(camera);
+
+    var lineDir = new THREE.Vector3().subVectors(near2, near1).normalize();
+    var viewDir = new THREE.Vector3().subVectors(far1, near1).normalize();
+    var planeNormal = new THREE.Vector3().crossVectors(lineDir, viewDir).normalize();
+    if (planeNormal.lengthSq() < 0.0001) return;
+
+    var cuttingPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, near1);
+
+    var segments = [];
+    scene.traverse(function(child) {
+        if (!child.isMesh || !child.visible) return;
+        var geo = child.geometry;
+        if (!geo.attributes || !geo.attributes.position) return;
+        var posAttr = geo.attributes.position;
+        var idx = geo.index;
+        var mtx = child.matrixWorld;
+        var triCount = idx ? idx.count / 3 : posAttr.count / 3;
+        for (var t = 0; t < triCount; t++) {
+            var i0, i1, i2;
+            if (idx) { i0 = idx.getX(t*3); i1 = idx.getX(t*3+1); i2 = idx.getX(t*3+2); }
+            else { i0 = t*3; i1 = t*3+1; i2 = t*3+2; }
+            var v0 = new THREE.Vector3(posAttr.getX(i0), posAttr.getY(i0), posAttr.getZ(i0)).applyMatrix4(mtx);
+            var v1 = new THREE.Vector3(posAttr.getX(i1), posAttr.getY(i1), posAttr.getZ(i1)).applyMatrix4(mtx);
+            var v2 = new THREE.Vector3(posAttr.getX(i2), posAttr.getY(i2), posAttr.getZ(i2)).applyMatrix4(mtx);
+            var d0 = cuttingPlane.distanceToPoint(v0);
+            var d1 = cuttingPlane.distanceToPoint(v1);
+            var d2 = cuttingPlane.distanceToPoint(v2);
+            var pts = [];
+            if (d0 * d1 < 0) { var r01 = d0 / (d0 - d1); pts.push(new THREE.Vector3().lerpVectors(v0, v1, r01)); }
+            if (d1 * d2 < 0) { var r12 = d1 / (d1 - d2); pts.push(new THREE.Vector3().lerpVectors(v1, v2, r12)); }
+            if (d2 * d0 < 0) { var r20 = d2 / (d2 - d0); pts.push(new THREE.Vector3().lerpVectors(v2, v0, r20)); }
+            if (pts.length >= 2) segments.push([pts[0], pts[1]]);
+        }
+    });
+
+    if (segments.length === 0) {
+        sectionCtx.clearRect(0, 0, sectionCanvas.width, sectionCanvas.height);
+        sectionCtx.fillStyle = '#999';
+        sectionCtx.font = '12px sans-serif';
+        sectionCtx.textAlign = 'center';
+        sectionCtx.fillText('未检测到截面', sectionCanvas.width / 2, sectionCanvas.height / 2);
+        return;
+    }
+
+    var uAxis = new THREE.Vector3().crossVectors(planeNormal, new THREE.Vector3(0, 1, 0));
+    if (uAxis.lengthSq() < 0.0001) uAxis = new THREE.Vector3().crossVectors(planeNormal, new THREE.Vector3(1, 0, 0));
+    uAxis.normalize();
+    var vAxis = new THREE.Vector3().crossVectors(planeNormal, uAxis).normalize();
+
+    var proj = [];
+    var minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (var s = 0; s < segments.length; s++) {
+        var seg = segments[s];
+        var pu0 = seg[0].dot(uAxis), pv0 = seg[0].dot(vAxis);
+        var pu1 = seg[1].dot(uAxis), pv1 = seg[1].dot(vAxis);
+        proj.push({ u0: pu0, v0: pv0, u1: pu1, v1: pv1 });
+        minU = Math.min(minU, pu0, pu1); maxU = Math.max(maxU, pu0, pu1);
+        minV = Math.min(minV, pv0, pv1); maxV = Math.max(maxV, pv0, pv1);
+    }
+
+    var cW = sectionCanvas.width;
+    var cH = sectionCanvas.height;
+    var rangeU = maxU - minU || 1;
+    var rangeV = maxV - minV || 1;
+    var margin = 20;
+    var sc = Math.min((cW - margin * 2) / rangeU, (cH - margin * 2) / rangeV);
+    var offU = (cW - rangeU * sc) / 2;
+    var offV = (cH - rangeV * sc) / 2;
+
+    sectionCtx.clearRect(0, 0, cW, cH);
+    sectionCtx.strokeStyle = '#e74c3c';
+    sectionCtx.lineWidth = 1.5;
+    sectionCtx.lineCap = 'round';
+    for (var s = 0; s < proj.length; s++) {
+        var p = proj[s];
+        var x0 = (p.u0 - minU) * sc + offU;
+        var y0 = cH - ((p.v0 - minV) * sc + offV);
+        var x1 = (p.u1 - minU) * sc + offU;
+        var y1 = cH - ((p.v1 - minV) * sc + offV);
+        sectionCtx.beginPath();
+        sectionCtx.moveTo(x0, y0);
+        sectionCtx.lineTo(x1, y1);
+        sectionCtx.stroke();
+    }
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', function() {
+    var w = window.innerWidth - SIDEBAR_W;
+    var h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+    if (sectionEnabled) resizeOverlay();
+});
+<\/script>
+</body></html>`;
 
         return template.replace('__MODEL_DATABASE_PLACEHOLDER__', JSON.stringify(MODEL_DATABASE, null, 2));
     }
